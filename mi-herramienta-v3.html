@@ -47,6 +47,8 @@ nav {
 .nav-btn:hover { background: var(--surface2); color: var(--text); }
 .nav-btn.active { background: var(--accent-light); color: var(--accent); }
 
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── SUB NAV (empresas, yo) ── */
 .sub-nav {
   background: var(--surface2); border-bottom:1px solid var(--border);
@@ -328,6 +330,27 @@ nav {
 </style>
 </head>
 <body>
+
+  <!-- PANTALLA DE LOGIN -->
+  <div id="login-screen" style="position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#8b6f47 0%,#5a4a3a 100%);display:flex;align-items:center;justify-content:center;z-index:9999;font-family:'Epilogue',sans-serif">
+    <div style="background:white;border-radius:16px;padding:3rem;max-width:420px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <div style="font-size:3rem;margin-bottom:1rem">✦</div>
+      <h1 style="color:#2a2520;font-size:1.8rem;margin:0 0 0.5rem;font-weight:700">Mi Espacio</h1>
+      <p style="color:#888;font-size:0.9rem;margin-bottom:2rem">Tu gestor personal sincronizado</p>
+      
+      <button id="google-login-btn" onclick="loginWithGoogle()" style="width:100%;padding:0.9rem;background:white;border:2px solid #8b6f47;color:#8b6f47;border-radius:8px;font-size:0.95rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:0.6rem;transition:all 0.3s">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6m0 0v6"></path></svg>
+        Entrar con Google
+      </button>
+      
+      <p style="font-size:0.75rem;color:#888;margin-top:1.5rem;line-height:1.5">Tus datos se guardan en Google Drive<br>100% privado y sincronizado en todos tus dispositivos</p>
+      <p id="login-error" style="color:#c94a4a;font-size:0.82rem;margin-top:1rem;display:none"></p>
+      <div id="login-loading" style="display:none;margin-top:1rem"><div style="border:2px solid #8b6f47;border-top:2px solid transparent;border-radius:50%;width:24px;height:24px;animation:spin 0.8s linear infinite;margin:0 auto"></div></div>
+    </div>
+  </div>
+
+  <!-- APP PRINCIPAL (oculta hasta login) -->
+  <div id="app-container" style="display:none">
 
 <nav>
   <div class="nav-brand">✦ Mi Espacio</div>
@@ -910,36 +933,6 @@ function init() {
   if(vistaGuardada){try{_vistaOpciones=JSON.parse(vistaGuardada);aplicarConfigVista();}catch(e){}}
 
   document.getElementById('fecha-hoy').textContent = new Date().toLocaleDateString('es-ES', {weekday:'long',year:'numeric',month:'long',day:'numeric'});
-  loadHoy();
-  renderDudas();
-  renderCajitas();
-  renderIdeas();
-  renderHistorial();
-  renderClientes();
-  renderEmpresas();
-  renderCopias();
-  renderListados();
-  setInterval(save, 30000);
-  scheduleAutoCopia();
-
-  // Preguntar si cargar historial del día anterior
-  const hoy=new Date().toISOString().split('T')[0];
-  const ayer=new Date(Date.now()-86400000).toISOString().split('T')[0];
-  const entradaAyer=state.historial?.find(h=>h.fechaISO===ayer);
-  const yaPregunte=localStorage.getItem('_preguntadoAyer');
-  if(entradaAyer && yaPregunte!==hoy && !state.prioridades?.some(p=>p) && !state.tasks?.length){
-    localStorage.setItem('_preguntadoAyer', hoy);
-    setTimeout(()=>{
-      if(confirm('¿Quieres cargar las tareas pendientes del día anterior?')){
-        const pendAyer=entradaAyer.tasks?.filter(t=>!t.done)||[];
-        if(pendAyer.length){
-          state.tasks=[...pendAyer,...(state.tasks||[])];
-          save(); renderTasks();
-          alert(`✓ ${pendAyer.length} tarea(s) pendiente(s) del día anterior cargadas.`);
-        } else { alert('No había tareas pendientes del día anterior.'); }
-      }
-    }, 800);
-  }
 }
 
 // ═══════════════════════
@@ -3325,7 +3318,223 @@ function actualizarFechaGestion(empresaId, clienteNombre, tipoServicio, nuevaFec
 // ═══════════════════════
 function escHtml(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-init();
+// ═══════════════════════
+// GOOGLE DRIVE INTEGRATION
+// ═══════════════════════
+const GOOGLE_CLIENT_ID = '39287622750-58a60cf3s453oibe9aj41s93vkersdha.apps.googleusercontent.com';
+const GOOGLE_SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/userinfo.profile'];
+let gapi_loaded = false;
+let gauthInstance = null;
+let googleUserProfile = null;
+
+// Cargar Google API
+function loadGoogleAPI() {
+  const script = document.createElement('script');
+  script.src = 'https://accounts.google.com/gsi/client';
+  script.async = true;
+  script.defer = true;
+  script.onload = () => {
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: handleGoogleLogin
+    });
+    // Cargar Google Drive API
+    gapi.load('client', initGoogleDriveAPI);
+  };
+  document.head.appendChild(script);
+  
+  // Cargar gapi
+  const gapiScript = document.createElement('script');
+  gapiScript.src = 'https://apis.google.com/js/api.js';
+  gapiScript.onload = () => { gapi_loaded = true; };
+  document.head.appendChild(gapiScript);
+}
+
+function initGoogleDriveAPI() {
+  gapi.client.init({
+    apiKey: 'AIzaSyA_placeholder',
+    discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+    scopes: GOOGLE_SCOPES
+  }).then(() => {
+    console.log('Google Drive API inicializado');
+  });
+}
+
+function loginWithGoogle() {
+  const loginBtn = document.getElementById('google-login-btn');
+  const loginLoading = document.getElementById('login-loading');
+  loginBtn.disabled = true;
+  loginLoading.style.display = 'block';
+  
+  google.accounts.id.renderButton(
+    document.getElementById('google-login-btn'),
+    {
+      type: 'standard',
+      size: 'large',
+      text: 'signin_with',
+      locale: 'es'
+    }
+  );
+  
+  // Alternative: usar popup
+  google.accounts.id.prompt((notification) => {
+    if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+      loginBtn.click();
+    }
+  });
+}
+
+function handleGoogleLogin(response) {
+  if (response.credential) {
+    // Decodificar JWT (sin validación servidor)
+    const base64Url = response.credential.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => {
+      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+    
+    const payload = JSON.parse(jsonPayload);
+    googleUserProfile = { email: payload.email, name: payload.name, picture: payload.picture };
+    
+    // Usar token para Google Drive
+    loadGoogleDriveData();
+  } else {
+    showLoginError('Error al autenticarse con Google');
+  }
+}
+
+function showLoginError(msg) {
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = msg;
+  errEl.style.display = 'block';
+  document.getElementById('login-loading').style.display = 'none';
+  document.getElementById('google-login-btn').disabled = false;
+}
+
+function loadGoogleDriveData() {
+  // Buscar archivo de datos en Google Drive
+  gapi.client.drive.files.list({
+    q: 'name="mi-espacio-data.json" and trashed=false',
+    spaces: 'drive',
+    pageSize: 1
+  }).then((response) => {
+    if (response.result.files.length > 0) {
+      // Archivo existe, cargar datos
+      const fileId = response.result.files[0].id;
+      gapi.client.drive.files.get({ fileId, alt: 'media' })
+        .then((res) => {
+          state = JSON.parse(res.body);
+          // Restaurar vista de configuración
+          const vistaGuardada = localStorage.getItem('mi-espacio-vista');
+          if (vistaGuardada) {
+            try { _vistaOpciones = JSON.parse(vistaGuardada); aplicarConfigVista(); } catch(e) {}
+          }
+          finalizarLogin();
+        })
+        .catch(() => { finalizarLogin(); }); // Si hay error, empieza vacío
+    } else {
+      // Primer login, crear archivo
+      finalizarLogin();
+    }
+  }).catch(() => { finalizarLogin(); });
+}
+
+function finalizarLogin() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app-container').style.display = 'block';
+  
+  loadHoy();
+  renderDudas();
+  renderCajitas();
+  renderIdeas();
+  renderHistorial();
+  renderClientes();
+  renderEmpresas();
+  renderCopias();
+  renderListados();
+  
+  setInterval(save, 30000);
+  scheduleAutoCopia();
+  
+  // Preguntar por tareas anteriores
+  const hoy = new Date().toISOString().split('T')[0];
+  const ayer = new Date(Date.now()-86400000).toISOString().split('T')[0];
+  const entradaAyer = state.historial?.find(h => h.fechaISO === ayer);
+  const yaPregunte = localStorage.getItem('_preguntadoAyer');
+  if (entradaAyer && yaPregunte !== hoy && !state.prioridades?.some(p => p) && !state.tasks?.length) {
+    localStorage.setItem('_preguntadoAyer', hoy);
+    setTimeout(() => {
+      if (confirm('¿Quieres cargar las tareas pendientes del día anterior?')) {
+        const pendAyer = entradaAyer.tasks?.filter(t => !t.done) || [];
+        if (pendAyer.length) {
+          state.tasks = [...pendAyer, ...(state.tasks || [])];
+          save(); renderTasks();
+          alert(`✓ ${pendAyer.length} tarea(s) pendiente(s) del día anterior cargadas.`);
+        } else {
+          alert('No había tareas pendientes del día anterior.');
+        }
+      }
+    }, 800);
+  }
+}
+
+// Override save() para guardar en Google Drive
+const originalSave = save;
+function save() {
+  originalSave(); // Guardar localmente también
+  
+  if (googleUserProfile) {
+    // Guardar en Google Drive
+    const fileContent = JSON.stringify(state, null, 2);
+    const blob = new Blob([fileContent], { type: 'application/json' });
+    
+    // Buscar archivo existente
+    gapi.client.drive.files.list({
+      q: 'name="mi-espacio-data.json" and trashed=false',
+      spaces: 'drive',
+      pageSize: 1
+    }).then((response) => {
+      if (response.result.files.length > 0) {
+        // Update
+        const fileId = response.result.files[0].id;
+        const metadata = { name: 'mi-espacio-data.json', mimeType: 'application/json' };
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+        form.append('file', blob);
+        
+        fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${gapi.auth.getToken().access_token}` },
+          body: form
+        }).catch(e => console.log('Error guardando en Drive:', e));
+      } else {
+        // Create
+        const metadata = { name: 'mi-espacio-data.json', mimeType: 'application/json' };
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+        form.append('file', blob);
+        
+        fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${gapi.auth.getToken().access_token}` },
+          body: form
+        }).catch(e => console.log('Error creando archivo en Drive:', e));
+      }
+    }).catch(e => console.log('Error en búsqueda Drive:', e));
+  }
+}
+
+// Cargar Google API al inicio
+loadGoogleAPI();
+
+// Init solo si está logueado (si no, espera al login)
+if (localStorage.getItem('mi-espacio-v3')) {
+  init();
+} else {
+  // Esperar login
+  console.log('Esperando login de Google...');
+}
 </script>
+  </div> <!-- cierre app-container -->
 </body>
 </html>
